@@ -39,6 +39,8 @@ public class LakeSoulTableLayoutHandle implements ConnectorTableLayoutHandle {
 
     private final HashMap<String, ColumnHandle> allColumns;
     private final List<FilterPredicate> filters;
+    private  List<FilterPredicate> parFilters;
+
     private final TupleDomain<ColumnHandle> tupleDomain;
     @JsonCreator
     public LakeSoulTableLayoutHandle(
@@ -100,16 +102,26 @@ public class LakeSoulTableLayoutHandle implements ConnectorTableLayoutHandle {
         return filters;
     }
 
+    public List<FilterPredicate> getParFilters() {
+        return parFilters;
+    }
+
+
     private List<FilterPredicate> buildFilters(){
         List<FilterPredicate> query = new LinkedList<>();
+        List<FilterPredicate> parFilters = new LinkedList<>();
         if (tupleDomain.getDomains().isPresent()) {
             for (Map.Entry<ColumnHandle, Domain> entry : tupleDomain.getDomains().get().entrySet()) {
                 LakeSoulTableColumnHandle column = (LakeSoulTableColumnHandle) entry.getKey();
                 FilterPredicate predicate = buildPredicate(column, entry.getValue());
                 if(predicate != null){
                     query.add(predicate);
+                    if(rangeKeys.contains(column.getColumnName())){
+                        parFilters.add(predicate);
+                    }
                 }
             }
+            this.parFilters = parFilters;
         }
         return query;
     }

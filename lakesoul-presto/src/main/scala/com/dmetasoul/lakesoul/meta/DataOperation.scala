@@ -6,7 +6,6 @@ package com.dmetasoul.lakesoul.meta
 
 import com.dmetasoul.lakesoul.meta.entity.DataCommitInfo
 import org.apache.hadoop.fs.Path
-
 import java.util
 import java.util.{Objects, UUID}
 import scala.collection.JavaConverters.{asJavaIterableConverter, asScalaBufferConverter}
@@ -59,6 +58,22 @@ object DataOperation {
     getTableDataInfo(MetaVersion.getAllPartitionInfo(tableId))
   }
 
+  def getTableDataInfo(tableId: String,partitions:List[String]): Array[DataFileInfo] = {
+    val Pars = MetaVersion.getAllPartitionInfo(tableId)
+    val partitionInfos = new ArrayBuffer[PartitionInfo]()
+    for ( partition_info <- Pars ) {
+      var contained = true;
+      for(item <- partitions) {
+        if (partitions.size>0 && !partition_info.range_value.contains(item)) {
+          contained = false
+        }
+      }
+      if(contained){
+        partitionInfos += partition_info
+      }
+    }
+    getTableDataInfo(partitionInfos.toArray)
+  }
   def getTableDataInfo(partition_info_arr: Array[PartitionInfo]): Array[DataFileInfo] = {
 
     val file_info_buf = new ArrayBuffer[DataFileInfo]()
