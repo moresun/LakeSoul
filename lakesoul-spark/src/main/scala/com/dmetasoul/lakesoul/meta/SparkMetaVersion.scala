@@ -6,14 +6,13 @@ package com.dmetasoul.lakesoul.meta
 
 import com.alibaba.fastjson.JSONObject
 import org.apache.spark.sql.lakesoul.catalog.LakeSoulCatalog
-import org.apache.spark.sql.lakesoul.utils.{PartitionInfo, SparkUtil, TableInfo}
+import org.apache.spark.sql.lakesoul.utils.{SparkUtil, TableInfo}
 
 import java.util
-import java.util.UUID
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
 
-object MetaVersion {
+object SparkMetaVersion {
 
   val dbManager = new DBManager()
 
@@ -119,9 +118,9 @@ object MetaVersion {
     )
   }
 
-  def getSinglePartitionInfo(table_id: String, range_value: String, range_id: String): PartitionInfo = {
+  def getSinglePartitionInfo(table_id: String, range_value: String, range_id: String): PartitionInfoScala = {
     val info = dbManager.getSinglePartitionInfo(table_id, range_value)
-    PartitionInfo(
+    PartitionInfoScala(
       table_id = info.getTableId,
       range_value = range_value,
       version = info.getVersion,
@@ -131,10 +130,10 @@ object MetaVersion {
     )
   }
 
-  def getSinglePartitionInfoForVersion(table_id: String, range_value: String, version: Int): Array[PartitionInfo] = {
-    val partitionVersionBuffer = new ArrayBuffer[PartitionInfo]()
+  def getSinglePartitionInfoForVersion(table_id: String, range_value: String, version: Int): Array[PartitionInfoScala] = {
+    val partitionVersionBuffer = new ArrayBuffer[PartitionInfoScala]()
     val info = dbManager.getSinglePartitionInfo(table_id, range_value, version)
-    partitionVersionBuffer += PartitionInfo(
+    partitionVersionBuffer += PartitionInfoScala(
       table_id = info.getTableId,
       range_value = range_value,
       version = info.getVersion,
@@ -146,12 +145,12 @@ object MetaVersion {
 
   }
 
-  def getOnePartitionVersions(table_id: String, range_value: String): Array[PartitionInfo] = {
-    val partitionVersionBuffer = new ArrayBuffer[PartitionInfo]()
+  def getOnePartitionVersions(table_id: String, range_value: String): Array[PartitionInfoScala] = {
+    val partitionVersionBuffer = new ArrayBuffer[PartitionInfoScala]()
     val res_itr = dbManager.getOnePartitionVersions(table_id, range_value).iterator()
     while (res_itr.hasNext) {
       val res = res_itr.next()
-      partitionVersionBuffer += PartitionInfo(
+      partitionVersionBuffer += PartitionInfoScala(
         table_id = res.getTableId,
         range_value = res.getPartitionDesc,
         version = res.getVersion,
@@ -183,12 +182,12 @@ object MetaVersion {
     (false, "")
   }
 
-  def getAllPartitionInfo(table_id: String): Array[PartitionInfo] = {
-    val partitionVersionBuffer = new ArrayBuffer[PartitionInfo]()
+  def getAllPartitionInfo(table_id: String): Array[PartitionInfoScala] = {
+    val partitionVersionBuffer = new ArrayBuffer[PartitionInfoScala]()
     val res_itr = dbManager.getAllPartitionInfo(table_id).iterator()
     while (res_itr.hasNext) {
       val res = res_itr.next()
-      partitionVersionBuffer += PartitionInfo(
+      partitionVersionBuffer += PartitionInfoScala(
         table_id = res.getTableId,
         range_value = res.getPartitionDesc,
         version = res.getVersion,

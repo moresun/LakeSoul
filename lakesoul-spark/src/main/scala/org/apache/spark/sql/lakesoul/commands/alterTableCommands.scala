@@ -4,6 +4,8 @@
 
 package org.apache.spark.sql.lakesoul.commands
 
+import com.dmetasoul.lakesoul.meta.DataFileInfo
+import org.apache.spark.sql.arrow.ArrowUtils
 import org.apache.spark.sql.catalyst.analysis.{Resolver, UnresolvedAttribute}
 import org.apache.spark.sql.catalyst.plans.logical.IgnoreCachedData
 import org.apache.spark.sql.connector.catalog.TableChange.{AddColumn, After, ColumnPosition, First}
@@ -13,7 +15,6 @@ import org.apache.spark.sql.execution.datasources.parquet.{ParquetFileFormat, Pa
 import org.apache.spark.sql.lakesoul.catalog.LakeSoulTableV2
 import org.apache.spark.sql.lakesoul.exception.LakeSoulErrors
 import org.apache.spark.sql.lakesoul.schema.SchemaUtils
-import org.apache.spark.sql.lakesoul.utils.DataFileInfo
 import org.apache.spark.sql.lakesoul.{LakeSoulConfig, TransactionCommit}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{AnalysisException, Row, SparkSession}
@@ -154,7 +155,7 @@ case class AlterTableAddColumnsCommand(
     SchemaUtils.checkColumnNameDuplication(newSchema, "in adding columns")
     DataSourceUtils.checkFieldNames(new ParquetFileFormat, newSchema)
 
-    val newTableInfo = tableInfo.copy(table_schema = newSchema.json)
+    val newTableInfo = tableInfo.copy(table_schema = ArrowUtils.toArrowSchema(newSchema).toJson)
     tc.commit(Seq.empty[DataFileInfo], Seq.empty[DataFileInfo], newTableInfo)
 
     Seq.empty[Row]
@@ -228,7 +229,7 @@ case class AlterTableChangeColumnCommand(
       case (_, _@StructType(fields), _) => fields
     }
 
-    val newTableInfo = tableInfo.copy(table_schema = newSchema.json)
+    val newTableInfo = tableInfo.copy(table_schema = ArrowUtils.toArrowSchema(newSchema).toJson)
     tc.commit(Seq.empty[DataFileInfo], Seq.empty[DataFileInfo], newTableInfo)
 
     Seq.empty[Row]
@@ -356,7 +357,7 @@ case class AlterTableReplaceColumnsCommand(
     SchemaUtils.checkColumnNameDuplication(newSchema, "in replacing columns")
     DataSourceUtils.checkFieldNames(new ParquetFileFormat(), newSchema)
 
-    val newTableInfo = tableInfo.copy(table_schema = newSchema.json)
+    val newTableInfo = tableInfo.copy(table_schema = ArrowUtils.toArrowSchema(newSchema).toJson)
     tc.commit(Seq.empty[DataFileInfo], Seq.empty[DataFileInfo], newTableInfo)
 
     Seq.empty[Row]
