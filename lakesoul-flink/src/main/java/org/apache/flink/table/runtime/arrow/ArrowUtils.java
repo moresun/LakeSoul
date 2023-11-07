@@ -150,6 +150,39 @@ public final class ArrowUtils {
         return new Schema(fields);
     }
 
+    public static Field toArrowField(String fieldName, LogicalType logicalType,HashMap<String,String> metadata) {
+        FieldType fieldType =
+                new FieldType(
+                        logicalType.isNullable(),
+                        logicalType.accept(LogicalTypeToArrowTypeConverter.INSTANCE),
+                        null,metadata);
+        List<Field> children = null;
+        if (logicalType instanceof ArrayType) {
+            children =
+                    Collections.singletonList(
+                            toArrowField("element", ((ArrayType) logicalType).getElementType()));
+        } else if (logicalType instanceof RowType) {
+            RowType rowType = (RowType) logicalType;
+            children = new ArrayList<>(rowType.getFieldCount());
+            for (RowType.RowField field : rowType.getFields()) {
+                children.add(toArrowField(field.getName(), field.getType()));
+            }
+        } else if (logicalType instanceof MapType) {
+            MapType mapType = (MapType) logicalType;
+            Preconditions.checkArgument(
+                    !mapType.getKeyType().isNullable(), "Map key type should be non-nullable");
+            children =
+                    Collections.singletonList(
+                            new Field(
+                                    "items",
+                                    new FieldType(false, ArrowType.Struct.INSTANCE, null),
+                                    Arrays.asList(
+                                            toArrowField("key", mapType.getKeyType()),
+                                            toArrowField("value", mapType.getValueType()))));
+        }
+        return new Field(fieldName, fieldType, children);
+    }
+
     public static Field toArrowField(String fieldName, LogicalType logicalType) {
         FieldType fieldType =
                 new FieldType(

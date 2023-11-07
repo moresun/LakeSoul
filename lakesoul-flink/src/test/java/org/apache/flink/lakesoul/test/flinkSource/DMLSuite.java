@@ -180,6 +180,27 @@ public class DMLSuite extends AbstractTestBase {
     }
 
 
+    @Test
+    public void testMetaDataSql() throws ExecutionException, InterruptedException {
+        TableEnvironment tEnv = TestUtils.createTableEnv(BATCH_TYPE);
+//        createLakeSoulSourceTableUserWithMetaData(tEnv);
+//        tEnv.executeSql("INSERT INTO user_info_2 VALUES (2, 'Alice', 80,100),(3, 'Jack', 75,90)").await();
+        StreamTableEnvironment streamEnv = TestUtils.createStreamTableEnv(BATCH_TYPE);
+        String testSelect = "select order_id,name,score from user_info_2";
+        //String testSelect = "select * from user_info_2";
+
+        TableImpl flinkTable = (TableImpl) streamEnv.sqlQuery(testSelect);
+        List<Row> results = CollectionUtil.iteratorToList(flinkTable.execute().collect());
+//        TestUtils.checkEqualInAnyOrder(results, new String[]{"+I[2, Alice, 80]", "+I[3, Jack, 75]"});
+//        tEnv.executeSql("INSERT INTO user_info VALUES (4, 'Mike', 70)").await();
+//        TableImpl flinkTable1 = (TableImpl) streamEnv.sqlQuery(testSelect);
+//        List<Row> results1 = CollectionUtil.iteratorToList(flinkTable1.execute().collect());
+//        TestUtils.checkEqualInAnyOrder(results1,
+//                new String[]{"+I[2, Alice, 80]", "+I[3, Jack, 75]", "+I[4, Mike, 70]"});
+        int a =0;
+    }
+
+
     private void createLakeSoulSourceTableUser(TableEnvironment tEnvs) throws ExecutionException, InterruptedException {
         String createUserSql = "create table user_info (" +
                 "    order_id INT," +
@@ -222,5 +243,19 @@ public class DMLSuite extends AbstractTestBase {
         tEnvs.executeSql("DROP TABLE if exists user_info");
         tEnvs.executeSql(createUserSql);
     }
-
+    private void createLakeSoulSourceTableUserWithMetaData(TableEnvironment tEnvs) throws ExecutionException, InterruptedException {
+        String createUserSql = "create table user_info_2 (" +
+                "    order_id INT," +
+                "    name STRING PRIMARY KEY NOT ENFORCED," +
+                "    record DECIMAL ," +
+                "    score INT METADATA " +
+                ") PARTITIONED BY ( order_id )" +
+                "WITH (" +
+                "    'format'='lakesoul'," +
+                "    'hashBucketNum'='2'," +
+                "    'path'='" + getTempDirUri("/lakeSource/user2") +
+                "' )";
+        tEnvs.executeSql("DROP TABLE if exists user_info_2");
+        tEnvs.executeSql(createUserSql);
+    }
 }

@@ -7,15 +7,16 @@ package org.apache.flink.lakesoul.tool;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.dmetasoul.lakesoul.lakesoul.io.NativeIOBase;
+import com.dmetasoul.lakesoul.meta.LakeSoulOptions;
 import com.dmetasoul.lakesoul.meta.*;
 import com.dmetasoul.lakesoul.meta.dao.TableInfoDao;
 import com.dmetasoul.lakesoul.meta.entity.TableInfo;
 import org.apache.arrow.vector.types.pojo.Field;
-import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
+import org.apache.flink.lakesoul.types.TableId;
 import org.apache.flink.runtime.fs.hdfs.HadoopFileSystem;
 import org.apache.flink.runtime.util.HadoopUtils;
 import org.apache.flink.table.api.*;
@@ -29,6 +30,7 @@ import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.runtime.arrow.ArrowUtils;
+import org.apache.flink.table.types.AtomicDataType;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
@@ -110,6 +112,7 @@ public class FlinkUtil {
         return new org.apache.arrow.vector.types.pojo.Schema(fields);
     }
 
+
     public static org.apache.arrow.vector.types.pojo.Schema toArrowSchema(TableSchema tsc, Optional<String> cdcColumn) throws CatalogException {
         List<Field> fields = new ArrayList<>();
         String cdcColName = null;
@@ -123,9 +126,18 @@ public class FlinkUtil {
             String name = tsc.getFieldName(i).get();
             DataType dt = tsc.getFieldDataType(i).get();
             if (name.equals(SORT_FIELD)) continue;
-
             LogicalType logicalType = dt.getLogicalType();
-            Field arrowField = ArrowUtils.toArrowField(name, logicalType);
+            HashMap<String, String> metadataMap = null;
+            if (tsc.getTableColumn(i).get() instanceof TableColumn.MetadataColumn) {
+                TableColumn.MetadataColumn metadataCol = (TableColumn.MetadataColumn) tsc.getTableColumn(i).get();
+                metadataMap = new LinkedHashMap<>();
+                metadataMap.put(LakeSoulOptions.VIRTUAL_METADATA(), String.valueOf(metadataCol.isVirtual()));
+                if (metadataCol.getMetadataAlias().isPresent()) {
+                    metadataMap.put(LakeSoulOptions.METADATA_ALAIS(), metadataCol.getMetadataAlias().get());
+                }
+            }
+
+            Field arrowField = ArrowUtils.toArrowField(name, logicalType, metadataMap);
             if (name.equals(cdcColName)) {
                 if (!arrowField.toString().equals(fields.get(0).toString())) {
                     throw new CatalogException(CDC_CHANGE_COLUMN +
@@ -143,6 +155,25 @@ public class FlinkUtil {
             }
         }
         return new org.apache.arrow.vector.types.pojo.Schema(fields);
+    }
+
+    public static org.apache.arrow.vector.types.pojo.Schema tableToRowType(TableId tableId) {
+        DBManager dbManager = new DBManager();
+        TableInfo tableInfo =
+                dbManager.getTableInfoByNameAndNamespace(tableId.table(), tableId.schema());
+        String tableSchema = tableInfo.getTableSchema();
+        org.apache.arrow.vector.types.pojo.Schema arrowSchema = null;
+        if (TableInfoDao.isArrowKindSchema(tableSchema)) {
+            try {
+                arrowSchema = org.apache.arrow.vector.types.pojo.Schema.fromJSON(tableSchema);
+            } catch (IOException e) {
+                throw new CatalogException(e);
+            }
+        } else {
+            StructType struct = (StructType) org.apache.spark.sql.types.DataType.fromJson(tableSchema);
+            arrowSchema = org.apache.spark.sql.arrow.ArrowUtils.toArrowSchema(struct, ZoneId.of("UTC").toString());
+        }
+        return arrowSchema;
     }
 
     public static StructType toSparkSchema(RowType rowType, Optional<String> cdcColumn) throws CatalogException {
@@ -294,7 +325,6 @@ public class FlinkUtil {
         JSONObject properties = JSON.parseObject(tableInfo.getProperties());
 
         org.apache.arrow.vector.types.pojo.Schema arrowSchema = null;
-        System.out.println(tableSchema);
         if (TableInfoDao.isArrowKindSchema(tableSchema)) {
             try {
                 arrowSchema = org.apache.arrow.vector.types.pojo.Schema.fromJSON(tableSchema);
@@ -306,8 +336,17 @@ public class FlinkUtil {
             arrowSchema = org.apache.spark.sql.arrow.ArrowUtils.toArrowSchema(struct, ZoneId.of("UTC").toString());
         }
         RowType rowType = ArrowUtils.fromArrowSchema(arrowSchema);
-        Builder bd = Schema.newBuilder();
+        //get metadata info
+        LinkedHashMap<String, Map> metadatas = new LinkedHashMap<>();
+        for (int i = 0; i < arrowSchema.getFields().size(); i++) {
+            Map hm = arrowSchema.getFields().get(i).getMetadata();
+            if (hm.containsKey(LakeSoulOptions.VIRTUAL_METADATA())) {
+                String name = arrowSchema.getFields().get(i).getName();
+                metadatas.put(name, arrowSchema.getFields().get(i).getMetadata());
+            }
+        }
 
+        Builder bd = Schema.newBuilder();
         String lakesoulCdcColumnName = properties.getString(CDC_CHANGE_COLUMN);
         boolean contains = (lakesoulCdcColumnName != null && !lakesoulCdcColumnName.isEmpty());
 
@@ -315,7 +354,13 @@ public class FlinkUtil {
             if (contains && field.getName().equals(lakesoulCdcColumnName)) {
                 continue;
             }
-            bd.column(field.getName(), field.getType().asSerializableString());
+            if (metadatas.size() > 0 && metadatas.containsKey(field.getName())) {
+                String metaAliasKey = (String)metadatas.get(field.getName()).getOrDefault(LakeSoulOptions.METADATA_ALAIS(),null);
+                Boolean isVirtual = Boolean.getBoolean((String)metadatas.get(field.getName()).get(LakeSoulOptions.VIRTUAL_METADATA()));
+                bd.columnByMetadata(field.getName(), field.getType().asSerializableString(),metaAliasKey,isVirtual);
+            }else {
+                bd.column(field.getName(), field.getType().asSerializableString());
+            }
         }
         DBUtil.TablePartitionKeys partitionKeys = DBUtil.parseTableInfoPartitions(tableInfo.getPartitions());
         if (!partitionKeys.primaryKeys.isEmpty()) {

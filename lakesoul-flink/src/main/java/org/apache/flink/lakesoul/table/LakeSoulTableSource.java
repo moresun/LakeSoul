@@ -7,11 +7,14 @@ package org.apache.flink.lakesoul.table;
 import com.dmetasoul.lakesoul.meta.DBConfig;
 import com.dmetasoul.lakesoul.meta.DBManager;
 import com.dmetasoul.lakesoul.meta.DBUtil;
+import com.dmetasoul.lakesoul.meta.LakeSoulOptions;
 import com.dmetasoul.lakesoul.meta.entity.PartitionInfo;
 import com.dmetasoul.lakesoul.meta.entity.TableInfo;
+import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.lakesoul.source.LakeSoulSource;
 import org.apache.flink.lakesoul.source.ParquetFilters;
+import org.apache.flink.lakesoul.tool.FlinkUtil;
 import org.apache.flink.lakesoul.tool.LakeSoulSinkOptions;
 import org.apache.flink.lakesoul.types.TableId;
 import org.apache.flink.table.connector.ChangelogMode;
@@ -19,11 +22,11 @@ import org.apache.flink.table.connector.RowLevelModificationScanContext;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
 import org.apache.flink.table.connector.source.SourceProvider;
-import org.apache.flink.table.connector.source.abilities.SupportsFilterPushDown;
-import org.apache.flink.table.connector.source.abilities.SupportsPartitionPushDown;
-import org.apache.flink.table.connector.source.abilities.SupportsProjectionPushDown;
-import org.apache.flink.table.connector.source.abilities.SupportsRowLevelModificationScan;
+import org.apache.flink.table.connector.source.abilities.*;
 import org.apache.flink.table.expressions.ResolvedExpression;
+import org.apache.flink.table.runtime.arrow.ArrowUtils;
+import org.apache.flink.table.types.AtomicDataType;
+import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
@@ -38,7 +41,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 public class LakeSoulTableSource
-        implements SupportsFilterPushDown, SupportsPartitionPushDown, SupportsProjectionPushDown, ScanTableSource, SupportsRowLevelModificationScan {
+        implements SupportsFilterPushDown, SupportsPartitionPushDown, SupportsProjectionPushDown, ScanTableSource, SupportsRowLevelModificationScan, SupportsReadingMetadata {
 
     private static final Logger LOG = LoggerFactory.getLogger(LakeSoulTableSource.class);
 
@@ -60,6 +63,8 @@ public class LakeSoulTableSource
     protected List<Map<String, String>> remainingPartitions;
 
     protected FilterPredicate filter;
+    List<String> metadataKeys;
+    DataType producedDataType;
 
     public LakeSoulTableSource(TableId tableId,
                                RowType rowType,
@@ -83,6 +88,8 @@ public class LakeSoulTableSource
         lsts.projectedFields = this.projectedFields;
         lsts.remainingPartitions = this.remainingPartitions;
         lsts.filter = this.filter;
+        lsts.producedDataType = this.producedDataType;
+        lsts.metadataKeys = this.metadataKeys;
         return lsts;
     }
 
@@ -234,5 +241,26 @@ public class LakeSoulTableSource
     @Override
     public RowLevelModificationScanContext applyRowLevelModificationScan(RowLevelModificationType rowLevelModificationType, @Nullable RowLevelModificationScanContext previousContext) {
         return null;
+    }
+
+    @Override
+    public Map<String, DataType> listReadableMetadata() {
+        Schema schema = FlinkUtil.tableToRowType(this.tableId);
+        RowType rt = ArrowUtils.fromArrowSchema(schema);
+        Map<String, DataType> metadata = new LinkedHashMap<>();
+        for (int i=0; i < schema.getFields().size(); i++) {
+            Map hm = schema.getFields().get(i).getMetadata();
+            if(hm.containsKey(LakeSoulOptions.VIRTUAL_METADATA())){
+                String name = schema.getFields().get(i).getName();
+                metadata.put(name,new AtomicDataType(rt.getTypeAt(rt.getFieldIndex(name))));
+            }
+        }
+        return metadata;
+    }
+
+    @Override
+    public void applyReadableMetadata(List<String> metadataKeys, DataType producedDataType) {
+            this.metadataKeys = metadataKeys;
+            this.producedDataType = producedDataType;
     }
 }

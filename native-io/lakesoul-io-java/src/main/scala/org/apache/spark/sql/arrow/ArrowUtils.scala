@@ -146,11 +146,21 @@ private[sql] object ArrowUtils {
   def fromArrowSchema(schema: Schema): StructType = {
     StructType(schema.getFields.asScala.map { field =>
       val dt = fromArrowField(field)
+      val metadataBuild = new MetadataBuilder
+      val isVirtual = "isVirtual"
+      val metaNameAlias = "metadataAlais"
+      if(field.getMetadata.containsKey(isVirtual)){
+        metadataBuild.putBoolean(isVirtual,field.getMetadata.get(isVirtual).toBoolean)
+      }
+      if (field.getMetadata.containsKey(metaNameAlias)) {
+        metadataBuild.putString(metaNameAlias, field.getMetadata.get(metaNameAlias))
+      }
+      val metadata = metadataBuild.build()
       val comment = field.getMetadata.get("spark_comment")
       if (comment == null)
-        StructField(field.getName, dt, field.isNullable)
+        StructField(field.getName, dt, field.isNullable,metadata)
       else
-        StructField(field.getName, dt, field.isNullable).withComment(comment)
+        StructField(field.getName, dt, field.isNullable,metadata).withComment(comment)
     }.toSeq)
   }
 

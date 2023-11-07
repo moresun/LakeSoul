@@ -31,6 +31,9 @@ object LakeSoulOptions {
   val TIME_ZONE = "timezone"
   val DISCOVERY_INTERVAL = "discoveryinterval"
 
+  val VIRTUAL_METADATA = "isVirtual";
+  val METADATA_ALAIS = "metadataAlais";
+
   object ReadType extends Enumeration {
     val FULL_READ = "fullread"
     val SNAPSHOT_READ = "snapshot"

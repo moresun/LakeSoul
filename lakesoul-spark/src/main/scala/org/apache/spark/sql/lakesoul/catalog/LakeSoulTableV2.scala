@@ -29,7 +29,7 @@ case class LakeSoulTableV2(spark: SparkSession,
                            tableIdentifier: Option[String] = None,
                            userDefinedFileIndex: Option[LakeSoulFileIndexV2] = None,
                            var mergeOperatorInfo: Option[Map[String, String]] = None)
-  extends Table with SupportsWrite with SupportsRead {
+  extends Table with SupportsWrite with SupportsRead with SupportsMetadataColumns{
 
   val path: Path = SparkUtil.makeQualifiedTablePath(path_orig)
 
@@ -141,7 +141,7 @@ case class LakeSoulTableV2(spark: SparkSession,
     SparkUtil.createRelation(partitionPredicates, snapshotManagement, spark)
   }
 
-
+  override def metadataColumns(): Array[MetadataColumn] = ???
 }
 
 private class WriteIntoTableBuilder(snapshotManagement: SnapshotManagement,

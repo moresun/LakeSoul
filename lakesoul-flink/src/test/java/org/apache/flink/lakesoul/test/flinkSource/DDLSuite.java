@@ -7,6 +7,7 @@ package org.apache.flink.lakesoul.test.flinkSource;
 import org.apache.flink.lakesoul.test.AbstractTestBase;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableException;
+import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.junit.Test;

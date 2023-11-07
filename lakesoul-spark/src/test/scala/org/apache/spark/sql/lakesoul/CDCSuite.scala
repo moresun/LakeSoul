@@ -215,6 +215,17 @@ class CDCSuite
     }
   }
 
+  test("test compaction") {
+    withTable("tt") {
+      withTempDir(dir => {
+        val tablepath = "file:///tmp/lakeSource/user"
+        val lake = LakeSoulTable.forPath(tablepath)
+        lake.toDF.show()
+      }
+      )
+    }
+  }
+
   test("test cdc with incremental") {
     withTable("tt") {
       withTempDir(dir => {
@@ -289,5 +300,34 @@ class CDCSuite
       assert(lake.toDF.count() == 2)
     })
 
+  }
+
+  test("test cdc compaction") {
+    withTable("tt") {
+      withTempDir(dir => {
+        val tablePath = "/tmp/lakesoulcom"
+        val tablePath1 = "/tmp/lakesoulcom1"
+
+                Seq(("range1", "hash1", "aaa_1", "insert"), ("range2", "hash1", "bbb_1", "insert"),("range1", "hash2", "bbb_1", "delete"))
+          .toDF("range", "hash", "value", "op")
+          .write
+          .mode("append")
+          .format("lakesoul")
+          .option(LakeSoulOptions.RANGE_PARTITIONS, "range")
+          .option(LakeSoulOptions.HASH_PARTITIONS, "hash")
+          .option(LakeSoulOptions.HASH_BUCKET_NUM, "1")
+          .option("lakesoul_cdc_change_column", "op")
+          .save(tablePath)
+        val lake = LakeSoulTable.forPath(tablePath)
+//        lake.toDF.where($"op"=!="delete").write
+//          .mode("overwrite")
+//          .format("lakesoul")
+//          .option(LakeSoulOptions.RANGE_PARTITIONS, "range")
+//          .option(LakeSoulOptions.HASH_PARTITIONS, "hash")
+//          .option(LakeSoulOptions.HASH_BUCKET_NUM, "1")
+//          .save(tablePath1)
+        lake.compaction()
+      })
+    }
   }
 }
