@@ -5,28 +5,29 @@
 package org.apache.flink.lakesoul.entry.sql.flink;
 
 
+import io.openlineage.flink.OpenLineageFlinkJobListener;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.time.Time;
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.*;
+import org.apache.flink.core.execution.JobListener;
 import org.apache.flink.lakesoul.entry.sql.Submitter;
 import org.apache.flink.lakesoul.entry.sql.common.FlinkOption;
 import org.apache.flink.lakesoul.entry.sql.common.JobType;
 import org.apache.flink.lakesoul.entry.sql.common.SubmitOption;
 import org.apache.flink.lakesoul.entry.sql.utils.FileUtil;
+import org.apache.flink.lakesoul.metadata.LakeSoulCatalog;
+import org.apache.flink.lakesoul.tool.JobOptions;
 import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.StatementSet;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.helpers.MessageFormatter;
-
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 
@@ -39,26 +40,40 @@ public class FlinkSqlSubmitter extends Submitter {
     }
 
     @Override
-    public void submit() throws IOException, URISyntaxException, ExecutionException, InterruptedException {
+    public void submit() throws Exception {
+        String lineageUrl = System.getenv("LINEAGE_URL");
         EnvironmentSettings settings = null;
-        TableEnvironment tEnv = null;
         if (submitOption.getJobType().equals(JobType.STREAM.getType())) {
             settings = EnvironmentSettings
                     .newInstance()
                     .inStreamingMode()
                     .build();
-
-            Configuration conf = new Configuration();
-            conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
-            StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
-            this.setCheckpoint(env);
-            tEnv = StreamTableEnvironment.create(env, settings);
         } else if (submitOption.getJobType().equals(JobType.BATCH.getType())) {
             settings = EnvironmentSettings.newInstance()
                     .inBatchMode()
                     .build();
-            tEnv = TableEnvironment.create(settings);
+        } else {
+            throw new RuntimeException("jobType is not supported");
+        }
+        if (lineageUrl != null) {
+            submitWithLineage(settings, lineageUrl);
+        }else{
+            submitWithOutLineage(settings);
+        }
 
+    }
+    public void submitWithOutLineage(EnvironmentSettings settings) throws Exception {
+        TableEnvironment tEnv = null;
+        if (submitOption.getJobType().equals(JobType.STREAM.getType())) {
+            Configuration conf = new Configuration();
+            conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
+//            conf.setString(RestOptions.BIND_PORT,"8081-8089");
+//            StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(conf);
+            StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+            this.setCheckpoint(env);
+            tEnv = StreamTableEnvironment.create(env, settings);
+        } else if (submitOption.getJobType().equals(JobType.BATCH.getType())) {
+            tEnv = TableEnvironment.create(settings);
         } else {
             throw new RuntimeException("jobType is not supported");
         }
@@ -68,6 +83,40 @@ public class FlinkSqlSubmitter extends Submitter {
                 MessageFormatter.format("\n======SQL Script Content from file {}:\n{}",
                         submitOption.getSqlFilePath(), sql).getMessage());
         ExecuteSql.executeSqlFileContent(sql, tEnv);
+    }
+
+    public void submitWithLineage(EnvironmentSettings settings, String lineageurl) throws Exception {
+        StreamTableEnvironment tEnv = null;
+        Configuration conf = new Configuration();
+        conf.set(ExecutionCheckpointingOptions.ENABLE_CHECKPOINTS_AFTER_TASKS_FINISH, true);
+        conf.set(JobOptions.transportTypeOption, "http");
+        conf.set(JobOptions.urlOption, lineageurl);
+        conf.set(JobOptions.execAttach, true);
+//        StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(conf);
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+        env.setParallelism(1);
+//        String appName = env.getConfiguration().get(HighAvailabilityOptions.HA_CLUSTER_ID);
+        String appName = env.getConfiguration().get(JobOptions.KUBE_CLUSTER_ID);
+        String namespace = System.getenv("LAKESOUL_CURRENT_DOMAIN");
+        LOG.info("----namespace:table----{}:{}",appName,namespace);
+        if (namespace == null) {
+            namespace = "public";
+        }
+        JobListener listener = OpenLineageFlinkJobListener.builder()
+                .executionEnvironment(env)
+                .jobName(appName)
+                .jobNamespace(namespace)
+                .build();
+        env.registerJobListener(listener);
+
+        this.setCheckpoint(env);
+        tEnv = StreamTableEnvironment.create(env, settings);
+        tEnv.registerCatalog("lakesoul", new LakeSoulCatalog());
+        String sql = FileUtil.readHDFSFile(submitOption.getSqlFilePath());
+        System.out.println(
+                MessageFormatter.format("\n======SQL Script Content from file {}:\n{}",
+                        submitOption.getSqlFilePath(), sql).getMessage());
+        ExecuteSql.executeSqlFileContentWithDataStream(sql, tEnv, env);
     }
 
     private void setCheckpoint(StreamExecutionEnvironment env) {

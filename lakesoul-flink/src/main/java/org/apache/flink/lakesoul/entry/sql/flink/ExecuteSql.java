@@ -7,7 +7,11 @@ package org.apache.flink.lakesoul.entry.sql.flink;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.StatementSet;
 import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.table.api.bridge.java.StreamStatementSet;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.internal.TableEnvironmentInternal;
 import org.apache.flink.table.delegation.Parser;
 import org.apache.flink.table.operations.BeginStatementSetOperation;
@@ -33,6 +37,18 @@ public class ExecuteSql {
     private static final String LINE_DELIMITER = "\n";
 
     private static final String COMMENT_PATTERN = "(--.*)|(((\\/\\*)+?[\\w\\W]+?(\\*\\/)+))";
+
+
+    public static void executeSqlFileContentWithDataStream(String script, StreamTableEnvironment tableEnv, StreamExecutionEnvironment streamEnv) throws Exception {
+        List<String> sqls = parseStatements(script);
+        StreamStatementSet statements =  tableEnv.createStatementSet();
+        for(String sql : sqls){
+            statements.addInsertSql(sql);
+        }
+        statements.attachAsDataStream();
+        streamEnv.execute();
+
+    }
 
     public static void executeSqlFileContent(String script, TableEnvironment tableEnv)
             throws ExecutionException, InterruptedException {

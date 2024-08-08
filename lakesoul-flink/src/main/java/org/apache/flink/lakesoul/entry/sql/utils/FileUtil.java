@@ -4,6 +4,7 @@
 
 package org.apache.flink.lakesoul.entry.sql.utils;
 
+import io.openlineage.flink.utils.ClassUtils;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.core.fs.Path;
 import org.slf4j.Logger;
@@ -52,5 +53,16 @@ public class FileUtil {
         Pattern pc = Pattern.compile(pattern, Pattern.CASE_INSENSITIVE);
         String replacedStr = pc.matcher(text).replaceAll(replaceText);
         return replacedStr;
+    }
+    public static boolean hasLakeSoulLineageClass(){
+        try {
+            ClassUtils.class
+                    .getClassLoader()
+                    .loadClass("io.openlineage.flink.visitor.LakeSoulSourceVisitor");
+            return true;
+        } catch (Exception e) {
+            // swallow- we don't care
+        }
+        return false;
     }
 }
