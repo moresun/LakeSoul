@@ -32,6 +32,9 @@ public final class DefaultOneTableBulkFormatBuilder
         super(basePath, conf, new DefaultLakeSoulWriterBucketFactory(conf));
         this.identity = identity;
     }
+    public TableSchemaIdentity getIdentity(){
+        return this.identity;
+    }
 
     @Override
     public AbstractLakeSoulMultiTableSinkWriter<RowData, RowData> createWriter(Sink.InitContext context, int subTaskId) throws
