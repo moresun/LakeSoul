@@ -7,7 +7,6 @@ import com.dmetasoul.lakesoul.lakesoul.io.jnr.LibLakeSoulIO;
 import com.dmetasoul.lakesoul.lakesoul.memory.ArrowMemoryUtils;
 import com.dmetasoul.lakesoul.meta.entity.JniWrapper;
 import com.dmetasoul.lakesoul.meta.entity.PartitionInfo;
-import com.dmetasoul.lakesoul.meta.jnr.NativeMetadataJavaClient;
 import com.google.protobuf.InvalidProtocolBufferException;
 import io.substrait.dsl.SubstraitBuilder;
 import io.substrait.expression.Expression;
@@ -69,8 +68,6 @@ public class SubstraitUtil {
 
     private static final LibLakeSoulIO LIB;
 
-    private static final Pointer BUFFER1;
-    private static final Pointer BUFFER2;
 
     private static final NativeIOBase NATIVE_IO_BASE;
 
@@ -82,13 +79,18 @@ public class SubstraitUtil {
             EXTENSIONS = SimpleExtension.loadDefaults();
             BUILDER = new SubstraitBuilder(EXTENSIONS);
             LIB = JnrLoader.get();
-            BUFFER1 = Runtime.getRuntime(LIB).getMemoryManager().allocateDirect(4096);
-            BUFFER2 = Runtime.getRuntime(LIB).getMemoryManager().allocateDirect(4096);
             LOCK = new ReentrantReadWriteLock();
             NATIVE_IO_BASE = new NativeIOBase("Substrait");
         } catch (IOException e) {
             throw new RuntimeException("load simple extension failed");
         }
+        java.lang.Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                NATIVE_IO_BASE.close();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }));
     }
 
     public static Expression and(Expression left, Expression right) {
@@ -204,12 +206,14 @@ public class SubstraitUtil {
         JniWrapper jniWrapper = JniWrapper.newBuilder().addAllPartitionInfo(allPartitionInfo).build();
 
         byte[] jniBytes = jniWrapper.toByteArray();
-        BUFFER1.put(0, jniBytes, 0, jniBytes.length);
-        BUFFER1.putByte(jniBytes.length, (byte) 0);
+        Pointer jniBuffer = Runtime.getRuntime(LIB).getMemoryManager().allocateDirect(jniBytes.length + 1, true);
+        jniBuffer.put(0, jniBytes, 0, jniBytes.length);
+        jniBuffer.putByte(jniBytes.length, (byte) 0);
 
         byte[] filterBytes = partitionFilter.toByteArray();
-        BUFFER2.put(0, filterBytes, 0, filterBytes.length);
-        BUFFER2.putByte(filterBytes.length, (byte) 0);
+        Pointer filterBuffer = Runtime.getRuntime(LIB).getMemoryManager().allocateDirect(filterBytes.length + 1, true);
+        filterBuffer.put(0, filterBytes, 0, filterBytes.length);
+        filterBuffer.putByte(filterBytes.length, (byte) 0);
 
         try {
             final CompletableFuture<Integer> filterFuture = new CompletableFuture<>();
@@ -221,15 +225,16 @@ public class SubstraitUtil {
                             filterFuture.completeExceptionally(new SQLException(msg));
                         }
                     }, NATIVE_IO_BASE.getIntReferenceManager()),
-                    jniBytes.length, BUFFER1.address(),
+                    jniBytes.length, jniBuffer.address(),
                     ffiSchema.memoryAddress(),
                     filterBytes.length,
-                    BUFFER2.address()
+                    filterBuffer.address()
             );
             Integer len = null;
             len = filterFuture.get(TIMEOUT, TimeUnit.MILLISECONDS);
             if (len < 0) return null;
             Integer lenWithTail = len + 1;
+            Pointer exportBuffer = Runtime.getRuntime(LIB).getMemoryManager().allocateDirect(lenWithTail, true);
 
             final CompletableFuture<Boolean> importFuture = new CompletableFuture<>();
             LIB.export_bytes_result(
@@ -242,13 +247,13 @@ public class SubstraitUtil {
                     }, NATIVE_IO_BASE.getBoolReferenceManager()),
                     filterResult,
                     len,
-                    BUFFER1.address()
+                    exportBuffer.address()
             );
             Boolean b = importFuture.get(TIMEOUT, TimeUnit.MILLISECONDS);
             if (!b) return null;
 
             byte[] bytes = new byte[len];
-            BUFFER1.get(0, bytes, 0, len);
+            exportBuffer.get(0, bytes, 0, len);
             resultPartitionInfo = JniWrapper.parseFrom(bytes).getPartitionInfoList();
             LIB.free_bytes_result(filterResult);
         } catch (InterruptedException e) {
@@ -266,7 +271,6 @@ public class SubstraitUtil {
 
         return resultPartitionInfo;
     }
-
 
     public static FieldReference arrowFieldToSubstraitField(Field field) {
         return FieldReference

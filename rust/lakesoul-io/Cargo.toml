@@ -31,6 +31,7 @@ smallvec = "1.10"
 dary_heap = "0.3"
 bytes = { workspace = true }
 hdrs = { git = "https://github.com/lakesoul-io/hdrs.git", branch = "main", features = ["async_file"], optional = true }
+hdfs-sys = { version = "0.3", default-features = false, features = ["hdfs_3_3"], optional = true }
 lazy_static = "1.4.0"
 chrono = "0.4"
 serde_json = { workspace = true }
@@ -43,11 +44,15 @@ log = "0.4.20"
 anyhow = { workspace = true, features = [] }
 prost = { workspace = true }
 env_logger = "0.11"
-
+hex = "0.4"
+dhat = { version="0.3.3", optional = true }
+async-recursion = "1.1.1"
 
 [features]
-hdfs = ["dep:hdrs"]
+hdfs = ["dep:hdrs", "dep:hdfs-sys"]
 default = []
+dhat-heap = ["dep:dhat"]    # if you are doing heap profiling
+dhat-ad-hoc = []  # if you are doing ad hoc profiling
 
 [target.'cfg(target_os = "windows")'.dependencies]
 datafusion-substrait = { workspace = true }
@@ -56,10 +61,9 @@ datafusion-substrait = { workspace = true }
 datafusion-substrait = { workspace = true, features = ["protoc"] }
 
 
-
-
 [dev-dependencies]
 tempfile = "3.3.0"
 comfy-table = "6.0"
 whoami = "1.5"
+tracing-subscriber = "0.3.18"
 

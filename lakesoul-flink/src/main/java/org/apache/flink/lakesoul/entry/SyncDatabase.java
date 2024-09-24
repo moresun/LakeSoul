@@ -14,7 +14,6 @@ import org.apache.flink.connector.base.DeliveryGuarantee;
 import org.apache.flink.connector.mongodb.sink.MongoSink;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.RestOptions;
-import org.apache.flink.core.execution.JobListener;
 import org.apache.flink.lakesoul.entry.sql.flink.LakeSoulInAndOutputJobListener;
 import org.apache.flink.lakesoul.metadata.LakeSoulCatalog;
 import org.apache.flink.lakesoul.tool.JobOptions;
@@ -24,7 +23,6 @@ import org.apache.flink.streaming.api.environment.ExecutionCheckpointingOptions;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.java.StreamStatementSet;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.catalog.Catalog;
@@ -37,6 +35,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.lakesoul.entry.MongoSinkUtils.*;
+import static org.apache.flink.lakesoul.tool.JobOptions.JOB_CHECKPOINT_INTERVAL;
 import static org.apache.flink.lakesoul.tool.LakeSoulSinkDatabasesOptions.*;
 
 public class SyncDatabase {
@@ -52,24 +51,25 @@ public class SyncDatabase {
     static boolean useBatch;
     static int sinkParallelism;
     static String jdbcOrDorisOptions;
+    static int checkpointInterval;
     static LakeSoulInAndOutputJobListener listener;
     static String lineageUrl = null;
 
     public static void main(String[] args) throws Exception {
         StringBuilder connectorOptions = new StringBuilder();
         ParameterTool parameter = ParameterTool.fromArgs(args);
-
         sourceDatabase = parameter.get(SOURCE_DB_DB_NAME.key());
         sourceTableName = parameter.get(SOURCE_DB_LAKESOUL_TABLE.key()).toLowerCase();
         dbType = parameter.get(TARGET_DATABASE_TYPE.key());
         targetDatabase = parameter.get(TARGET_DB_DB_NAME.key());
         targetTableName = parameter.get(TARGET_DB_TABLE_NAME.key()).toLowerCase();
         url = parameter.get(TARGET_DB_URL.key());
+        checkpointInterval = parameter.getInt(JOB_CHECKPOINT_INTERVAL.key(), JOB_CHECKPOINT_INTERVAL.defaultValue());
         if (dbType.equals("mysql") || dbType.equals("postgresql") || dbType.equals("doris")){
             for (int i = 0; i < args.length; i++) {
-                if ( args[i].startsWith("--jdbc") || args[i].startsWith("--doris")){
+                if ( args[i].startsWith("--D")){
                     connectorOptions.append("'")
-                            .append(args[i].substring(7))
+                            .append(args[i].substring(3))
                             .append("'")
                             .append("=")
                             .append("'")
@@ -88,9 +88,6 @@ public class SyncDatabase {
         }
         sinkParallelism = parameter.getInt(SINK_PARALLELISM.key(), SINK_PARALLELISM.defaultValue());
         useBatch = parameter.getBoolean(BATHC_STREAM_SINK.key(), BATHC_STREAM_SINK.defaultValue());
-        //int replicationNum = parameter.getInt(DORIS_REPLICATION_NUM.key(), DORIS_REPLICATION_NUM.defaultValue());
-
-        String fenodes = parameter.get(DORIS_FENODES.key(), DORIS_FENODES.defaultValue());
         Configuration conf = new Configuration();
         conf.setString(RestOptions.BIND_PORT, "8081-8089");
         StreamExecutionEnvironment env = null;
@@ -117,7 +114,6 @@ public class SyncDatabase {
             env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
         }
         env.setParallelism(sinkParallelism);
-
         switch (dbType) {
             case "mysql":
                 xsyncToMysql(env);
@@ -126,6 +122,7 @@ public class SyncDatabase {
                 xsyncToPg(env);
                 break;
             case "doris":
+                String fenodes = parameter.get(DORIS_FENODES.key(), DORIS_FENODES.defaultValue());
                 xsyncToDoris(env, fenodes);
                 break;
             case "mongodb":
@@ -220,7 +217,7 @@ public class SyncDatabase {
         String[] stringFieldTypes = new String[fieldTypes.length];
         for (int i = 0; i < fieldTypes.length; i++) {
             if (fieldTypes[i].getLogicalType() instanceof TimestampType) {
-                stringFieldTypes[i] = "DATETIME";
+                stringFieldTypes[i] = "TIMESTAMP";
             } else if (fieldTypes[i].getLogicalType() instanceof VarCharType) {
                 stringFieldTypes[i] = "VARCHAR";
             } else if (fieldTypes[i].getLogicalType() instanceof LocalZonedTimestampType ) {
@@ -260,7 +257,7 @@ public class SyncDatabase {
             env.setRuntimeMode(RuntimeExecutionMode.BATCH);
         } else {
             env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
-            env.enableCheckpointing(2000, CheckpointingMode.EXACTLY_ONCE);
+            env.enableCheckpointing(checkpointInterval, CheckpointingMode.EXACTLY_ONCE);
             env.getCheckpointConfig().setExternalizedCheckpointCleanup(CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
         }
         StreamTableEnvironment tEnvs = StreamTableEnvironment.create(env);
@@ -280,14 +277,19 @@ public class SyncDatabase {
         statement.executeUpdate(createTableSql.toString());
         StringBuilder coulmns = new StringBuilder();
         for (int i = 0; i < fieldDataTypes.length; i++) {
-            if (stringFieldsTypes[i].equals("BYTEA")) {
-                coulmns.append("`").append(fieldNames[i]).append("` ").append("BYTES");
-            } else if (stringFieldsTypes[i].equals("TEXT")) {
-                coulmns.append("`").append(fieldNames[i]).append("` ").append("VARCHAR");
-            } else if (stringFieldsTypes[i].equals("FLOAT8")) {
-                coulmns.append("`").append(fieldNames[i]).append("`").append("DOUBLE");
-            } else {
-                coulmns.append("`").append(fieldNames[i]).append("` ").append(stringFieldsTypes[i]);
+            switch (stringFieldsTypes[i]) {
+                case "BYTEA":
+                    coulmns.append("`").append(fieldNames[i]).append("` ").append("BYTES");
+                    break;
+                case "TEXT":
+                    coulmns.append("`").append(fieldNames[i]).append("` ").append("VARCHAR");
+                    break;
+                case "FLOAT8":
+                    coulmns.append("`").append(fieldNames[i]).append("`").append("DOUBLE");
+                    break;
+                default:
+                    coulmns.append("`").append(fieldNames[i]).append("` ").append(stringFieldsTypes[i]);
+                    break;
             }
             if (i < fieldDataTypes.length - 1) {
                 coulmns.append(",");
@@ -325,7 +327,7 @@ public class SyncDatabase {
             env.setRuntimeMode(RuntimeExecutionMode.BATCH);
         } else {
             env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
-            env.enableCheckpointing(2000, CheckpointingMode.EXACTLY_ONCE);
+            env.enableCheckpointing(checkpointInterval, CheckpointingMode.EXACTLY_ONCE);
             env.getCheckpointConfig().setExternalizedCheckpointCleanup(CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
         }
         StreamTableEnvironment tEnvs = StreamTableEnvironment.create(env);
@@ -385,12 +387,12 @@ public class SyncDatabase {
         conn.close();
     }
 
-    public static void xsyncToDoris(StreamExecutionEnvironment env, String fenodes) throws SQLException {
+    public static void xsyncToDoris(StreamExecutionEnvironment env, String fenodes) throws Exception {
         if (useBatch) {
             env.setRuntimeMode(RuntimeExecutionMode.BATCH);
         } else {
             env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
-            env.enableCheckpointing(2000, CheckpointingMode.EXACTLY_ONCE);
+            env.enableCheckpointing(checkpointInterval, CheckpointingMode.EXACTLY_ONCE);
             env.getCheckpointConfig().setExternalizedCheckpointCleanup(CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
         }
         StreamTableEnvironment tEnvs = StreamTableEnvironment.create(env);
@@ -401,6 +403,14 @@ public class SyncDatabase {
         DataType[] fieldDataTypes = lakesoulTable.getSchema().getFieldDataTypes();
         String[] fieldNames = lakesoulTable.getSchema().getFieldNames();
         String[] dorisFieldTypes = getDorisFieldTypes(fieldDataTypes);
+        if (lineageUrl != null) {
+            String inputName = "lakeSoul." + sourceDatabase + "." + sourceTableName;
+            String inputnNamespace = getTableDomain(sourceDatabase,sourceTableName);
+            String[] inputTypes = Arrays.stream(fieldDataTypes).map(type -> type.toString()).collect(Collectors.toList()).toArray(new String[0]);
+            listener.inputFacets(inputName,inputnNamespace,fieldNames,inputTypes);
+            String targetName = "doris." + targetDatabase + "." + targetTableName;
+            listener.outputFacets(targetName,"lake-public",fieldNames,dorisFieldTypes);
+        }
         StringBuilder coulmns = new StringBuilder();
         for (int i = 0; i < fieldDataTypes.length; i++) {
             coulmns.append("`").append(fieldNames[i]).append("` ").append(dorisFieldTypes[i]);
@@ -411,16 +421,40 @@ public class SyncDatabase {
         String sql;
         if (jdbcOrDorisOptions == null){
             sql = String.format(
-                    "create table %s(%s) with ('connector' = '%s', 'jdbc-url' = '%s', 'fenodes' = '%s', 'table.identifier' = '%s', 'username' = '%s', 'password' = '%s')",
+                    "create table %s(%s) with ('connector' = '%s'," +
+                            " 'jdbc-url' = '%s'," +
+                            " 'fenodes' = '%s'," +
+                            " 'table.identifier' = '%s'," +
+                            " 'username' = '%s'," +
+                            " 'password' = '%s'," +
+                            " 'sink.properties.format' = 'json'," +
+                            " 'sink.properties.read_json_by_line' = 'true')",
                     targetTableName, coulmns, "doris", jdbcUrl, fenodes, targetDatabase + "." + targetTableName, username, password);
         }else {
             sql = String.format(
-                    "create table %s(%s) with ('connector' = '%s', 'jdbc-url' = '%s', 'fenodes' = '%s', 'table.identifier' = '%s', 'username' = '%s', 'password' = '%s', %s)",
+                    "create table %s(%s) with ('connector' = '%s'," +
+                            " 'jdbc-url' = '%s'," +
+                            " 'fenodes' = '%s'," +
+                            " 'table.identifier' = '%s'," +
+                            " 'username' = '%s'," +
+                            " 'password' = '%s'," +
+                            " 'sink.properties.format' = 'json'," +
+                            " 'sink.properties.read_json_by_line' = 'true'," +
+                            "  %s)",
                     targetTableName, coulmns, "doris", jdbcUrl, fenodes, targetDatabase + "." + targetTableName, username, password, jdbcOrDorisOptions);
         }
 
         tEnvs.executeSql(sql);
-        tEnvs.executeSql("insert into " + targetTableName + " select * from lakeSoul.`" + sourceDatabase + "`." + sourceTableName);
+        if (lineageUrl != null){
+            String insertsql = "insert into " + targetTableName + " select * from lakeSoul.`" + sourceDatabase + "`." + sourceTableName;
+            StreamStatementSet statements =  tEnvs.createStatementSet();
+            statements.addInsertSql(insertsql);
+            statements.attachAsDataStream();
+            env.execute();
+        }else{
+            tEnvs.executeSql("insert into " + targetTableName + " select * from lakeSoul.`" + sourceDatabase + "`." + sourceTableName);
+
+        }
     }
 
     public static void xsyncToMongodb(StreamExecutionEnvironment env,
@@ -432,7 +466,7 @@ public class SyncDatabase {
             env.setRuntimeMode(RuntimeExecutionMode.BATCH);
         } else {
             env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
-            env.enableCheckpointing(2000, CheckpointingMode.EXACTLY_ONCE);
+            env.enableCheckpointing(checkpointInterval, CheckpointingMode.EXACTLY_ONCE);
             env.getCheckpointConfig().setExternalizedCheckpointCleanup(CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
         }
         StreamTableEnvironment tEnvs = StreamTableEnvironment.create(env);
