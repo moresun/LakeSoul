@@ -4,6 +4,8 @@
 
 package org.apache.spark.sql.lakesoul.commands
 
+import com.alibaba.fastjson.{JSON, JSONObject}
+import com.dmetasoul.lakesoul.meta.DBConfig.TableInfoProperty
 import com.dmetasoul.lakesoul.meta.{DataFileInfo, PartitionInfoScala, SparkMetaVersion}
 import com.dmetasoul.lakesoul.spark.clean.CleanOldCompaction.cleanOldCommitOpDiskData
 import org.apache.hadoop.fs.Path
@@ -32,7 +34,8 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
                              mergeOperatorInfo: Map[String, String],
                              hiveTableName: String = "",
                              hivePartitionName: String = "",
-                             cleanOldCompaction: Boolean
+                             cleanOldCompaction: Boolean,
+                             bucketNum: Int
                             )
   extends LeafRunnableCommand with PredicateHelper with Logging {
 
@@ -99,7 +102,7 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
     if (readPartitionInfo.nonEmpty) {
       map.put("partValue", readPartitionInfo.head.range_value)
     }
-    val (newFiles, path) = tc.writeFiles(compactDF, Some(new LakeSoulOptions(map.toMap, spark.sessionState.conf)), isCompaction = true)
+    val (newFiles, path) = tc.writeFiles(compactDF, Some(new LakeSoulOptions(map.toMap, spark.sessionState.conf)), isCompaction = true,bucketNum)
     tc.commit(newFiles, Seq.empty, readPartitionInfo)
     val partitionStr = escapeSingleBackQuotedString(conditionString)
     if (hiveTableName.nonEmpty) {
@@ -180,15 +183,13 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
 
       })
     } else {
-
+      val oldTableInfo = snapshotManagement.getTableInfoOnly
       val allInfo = SparkMetaVersion.getAllPartitionInfo(snapshotManagement.getTableInfoOnly.table_id)
       val partitionsNeedCompact = allInfo
         .filter(filterPartitionNeedCompact(sparkSession, force, _))
-
       partitionsNeedCompact.foreach(part => {
         snapshotManagement.withNewTransaction(tc => {
           val files = tc.getCompactionPartitionFiles(part)
-
           val hasNoDeltaFile = if (force) {
             false
           } else {
@@ -205,6 +206,13 @@ case class CompactionCommand(snapshotManagement: SnapshotManagement,
           }
         })
       })
+      if (oldTableInfo.bucket_num != bucketNum) {
+        val properties = SparkMetaVersion.dbManager.getTableInfoByTableId(oldTableInfo.table_id).getProperties
+        val newProperties = JSON.parseObject(properties);
+        newProperties.put(TableInfoProperty.HASH_BUCKET_NUM, bucketNum)
+        SparkMetaVersion.dbManager.updateTableProperties(oldTableInfo.table_id, newProperties.toJSONString)
+        snapshotManagement.updateSnapshot()
+      }
     }
     Seq.empty
   }
